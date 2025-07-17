@@ -1,9 +1,11 @@
 paths:
   data_raw: ../data/raw         # Para salvar os .zip e arquivos baixados da CVM
   data_processed: ../data/processed  # Para salvar os arquivos .csv tratados (opcional)
+  data_consolidated: ../data/consolidated  # Para salvar os arquivos .csv consolidados
   output: ../output             # Para qualquer output como gráficos, tabelas, logs
   img: ../img                   # Para salvar figuras do relatório ou do BI
   src: ../src                   # Código-fonte do projeto
+  log: ../log                   # Para logs de processamento
 
 files:
   log_downloads: downloads_log.csv  # Controle de arquivos já baixados (caso deseje implementar)
