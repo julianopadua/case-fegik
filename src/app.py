@@ -1,75 +1,108 @@
-import streamlit as st
-import pandas as pd
 import os
+import pandas as pd
+import streamlit as st
 from utils import load_config
 
 # ========================================
 # CONFIGURAÇÃO GLOBAL
 # ========================================
-
 paths, config = load_config()
-
-st.set_page_config(layout="wide")  # layout mais amplo para sidebar larga
+st.set_page_config(layout="wide")
 
 # ========================================
-# FUNÇÕES
+# CARREGAMENTO E TRATAMENTO
 # ========================================
-
 @st.cache_data
 def load_consolidado_geral():
-    caminho_csv = os.path.join(paths["data_consolidated"], "consolidado_geral.csv")
-    df = pd.read_csv(caminho_csv, dtype=str)
-    df = df.where(pd.notnull(df), None)
-    df["CNPJ_Chave"] = df["CNPJ_Fundo"]
-    df["Nome_Fundo"] = df["Nome_Fundo"]
-
-    # Remove duplicatas para garantir unicidade
-    df = df.drop_duplicates(subset=["CNPJ_Chave", "Nome_Fundo"])
-
-    return df[df["CNPJ_Chave"].notna() & df["Nome_Fundo"].notna()]
-
-def montar_sidebar(df_fundos):
-    st.sidebar.header("🔎 Selecionar Fundo")
-
-    # Remover duplicações nas opções
-    df_opcoes = df_fundos[["CNPJ_Chave", "Nome_Fundo"]].drop_duplicates()
-
-    # Criar opções bem formatadas
-    df_opcoes["opcao"] = df_opcoes["CNPJ_Chave"] + " – " + df_opcoes["Nome_Fundo"]
-
-    # Campo dinâmico com busca integrada
-    selecao = st.sidebar.selectbox(
-        "Buscar por CNPJ ou Nome:",
-        sorted(df_opcoes["opcao"]),
-        index=None,
-        placeholder="Digite ou selecione um fundo"
+    """Agrupa por CNPJ_Fundo e escolhe o primeiro Nome_Fundo."""
+    caminho = os.path.join(paths["data_consolidated"], "consolidado_geral.csv")
+    df = pd.read_csv(caminho, dtype=str).fillna("")
+    # chave e nome
+    df = df.loc[df["CNPJ_Fundo"].ne("")]
+    # agrupa por CNPJ, pega o primeiro nome
+    df = (
+        df.groupby("CNPJ_Fundo", as_index=False)
+          .agg({"Nome_Fundo": "first"})
+          .rename(columns={"CNPJ_Fundo": "CNPJ_Chave"})
     )
+    return df
 
-    # Extrair CNPJ
-    cnpj = selecao.split(" – ")[0] if selecao else None
-    return cnpj
+@st.cache_data
+def load_consolidado_ativo():
+    """Carrega e formata a base de ativos."""
+    caminho = os.path.join(paths["data_consolidated"], "consolidado_ativo.csv")
+    df = pd.read_csv(caminho, dtype=str).fillna("")
+    df["Data_Referencia"] = pd.to_datetime(df["Data_Referencia"], format="%Y-%m-%d")
+    df["Quantidade"] = pd.to_numeric(df["Quantidade"], errors="coerce").fillna(0)
+    df["Valor"]     = pd.to_numeric(df["Valor"],     errors="coerce").fillna(0)
+    return df
 
-def mostrar_analise_fundo(fundo_df):
-    nome_fundo = fundo_df["Nome_Fundo"].iloc[0]
-    st.title(f"📊 Análise do Fundo: {nome_fundo}")
+# ========================================
+# UI: SIDEBAR
+# ========================================
+def sidebar_selecoes(df_fundos, df_ativos):
+    st.sidebar.header("🔎 Selecione o Fundo")
+    # Dropdown CNPJ – Nome (único por CNPJ)
+    df_fundos["opcao"] = df_fundos["CNPJ_Chave"] + " – " + df_fundos["Nome_Fundo"]
+    selecao = st.sidebar.selectbox(
+        "Fundo:",
+        sorted(df_fundos["opcao"]),
+        placeholder="Digite ou selecione"
+    )
+    if not selecao:
+        return None, []
+    cnpj = selecao.split(" – ")[0]
 
-    # TODO: adicionar análises solicitadas pelo case
-    st.write("🔧 Aqui vão as análises financeiras, portfólio, vacância, etc.")
+    # Lista dinâmica de TIPOS de ativos desse fundo
+    df_f = df_ativos[df_ativos["CNPJ_Fundo"] == cnpj]
+    tipos = sorted(df_f["Tipo"].unique())
+    tipos_sel = st.sidebar.multiselect(
+        "📌 Tipos de ativos:",
+        tipos,
+        default=tipos
+    )
+    return cnpj, tipos_sel
+
+# ========================================
+# UI: REGIÕES PRINCIPAIS
+# ========================================
+def mostrar_dashboard_fundo(df_fundo):
+    st.title(f"📊 Análise do Fundo: {df_fundo['Nome_Fundo'].iloc[0]}")
+    st.markdown("**Seções disponíveis:**  \n"
+                "- 📈 Portfólio de Ativos por Tipo  \n"
+                "- 🔜 Outros indicadores em breve")
+
+def mostrar_tabelas_por_tipo(df_ativos, cnpj, tipos_sel):
+    st.subheader("📊 Portfólio de Ativos")
+    for tipo in tipos_sel:
+        st.markdown(f"### 🔖 Tipo: {tipo}")
+        df_tipo = df_ativos[
+            (df_ativos["CNPJ_Fundo"] == cnpj) &
+            (df_ativos["Tipo"]       == tipo)
+        ].loc[:, ["Data_Referencia", "Nome_Ativo", "Quantidade", "Valor"]]
+        df_tipo = df_tipo.sort_values("Data_Referencia")
+        if df_tipo.empty:
+            st.info("Sem registros para este tipo de ativo.")
+        else:
+            st.dataframe(df_tipo, use_container_width=True)
 
 # ========================================
 # APP PRINCIPAL
 # ========================================
-
 def main():
     df_fundos = load_consolidado_geral()
-    cnpj_selecionado = montar_sidebar(df_fundos)
+    df_ativos = load_consolidado_ativo()
 
-    if cnpj_selecionado:
-        fundo_df = df_fundos[df_fundos["CNPJ_Chave"] == cnpj_selecionado]
-        mostrar_analise_fundo(fundo_df)
-    else:
+    cnpj, tipos_sel = sidebar_selecoes(df_fundos, df_ativos)
+    if not cnpj:
         st.title("📈 Dashboard de Fundos Imobiliários")
-        st.info("Selecione um fundo na barra lateral para iniciar a análise.")
+        st.info("Selecione um fundo na barra lateral para iniciar.")
+        return
+
+    # Filtra o nome do fundo
+    df_fundo = df_fundos[df_fundos["CNPJ_Chave"] == cnpj]
+    mostrar_dashboard_fundo(df_fundo)
+    mostrar_tabelas_por_tipo(df_ativos, cnpj, tipos_sel)
 
 if __name__ == "__main__":
     main()
