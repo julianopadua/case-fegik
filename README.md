@@ -82,6 +82,17 @@ git clone https://github.com/seu-usuario/case-fegik.git
 cd case-fegik
 ````
 
+### ⚠️ Observação importante para testes locais
+Caso deseje **testar o algoritmo de extração e tratamento de dados** (webscraping), você deve **deletar a pasta `data/` inteira antes de executar `main.py`**.
+
+```bash
+rm -rf data/
+```
+
+> Isso é necessário porque, para hospedar a aplicação na web (por exemplo, via Streamlit Cloud), os arquivos `.csv` consolidados já foram incluídos no repositório. Dessa forma, o script `main.py` detecta que os dados já existem e não baixa novamente.
+
+---
+
 #### 2. Crie e ative um ambiente virtual
 
 ##### No **Linux/macOS**:

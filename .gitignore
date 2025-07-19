@@ -1,4 +1,3 @@
 *.zip
-*.csv
 venv/
 *.log
