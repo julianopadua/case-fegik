@@ -1,44 +1,103 @@
-import pandas as pd
-from utils import *
 import os
+import re
+import time
+import requests
+from pathlib import Path
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
 
-paths, config = load_config()
+def download_documents_for_cnpj(cnpj_raw: str, download_dir: str):
+    """
+    Acessa o Gerenciador de Documentos CVM para o CNPJ informado,
+    faz scrape da lista de documentos e baixa cada PDF, nomeando
+    por <Tipo>_<YYYY-MM>.pdf, além de imprimir a tabela extraída.
+    """
+    # prepara CNPJ sem formatação
+    cnpj_digits = re.sub(r"\D", "", cnpj_raw)
+    url = (
+        "https://fnet.bmfbovespa.com.br/fnet/publico/"
+        f"abrirGerenciadorDocumentosCVM?cnpjFundo={cnpj_digits}"
+    )
 
-# Define o caminho do consolidado_geral.csv dentro da pasta data_consolidated
-caminho_csv = os.path.join(paths["data_consolidated"], "consolidado_geral.csv")
+    # configura Chrome headless com download automático
+    download_path = Path(download_dir) / cnpj_digits
+    download_path.mkdir(parents=True, exist_ok=True)
 
-# Carrega o CSV
-df = pd.read_csv(caminho_csv, dtype=str)
+    chrome_opts = Options()
+    chrome_opts.add_argument("--headless")
+    chrome_opts.add_experimental_option("prefs", {
+        "download.default_directory": str(download_path),
+        "download.prompt_for_download": False,
+        "plugins.always_open_pdf_externally": True
+    })
+    driver = webdriver.Chrome(options=chrome_opts)
 
-# Garante que campos vazios fiquem como None
-df = df.where(pd.notnull(df), None)
+    try:
+        driver.get(url)
+        # espera a tabela aparecer
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "#tblDocumentosEnviados tbody tr"))
+        )
+        time.sleep(1)  # garante que o JS preencheu tudo
 
-# Total de linhas
-total_linhas = len(df)
+        # parseia HTML
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        rows = soup.select("#tblDocumentosEnviados tbody tr")
 
-# Linhas com ambos preenchidos
-ambos_preenchidos = df[df['CNPJ_Fundo'].notna() & df['CNPJ_Fundo_Classe'].notna()]
+        print(f"\n=== Documentos para {cnpj_raw} ===")
+        downloaded = []
 
-# Linhas com apenas CNPJ_Fundo
-so_cnpj_fundo = df[df['CNPJ_Fundo'].notna() & df['CNPJ_Fundo_Classe'].isna()]
+        # extrai cookies para usar em requests
+        session = requests.Session()
+        for ck in driver.get_cookies():
+            session.cookies.set(ck['name'], ck['value'])
 
-# Linhas com apenas CNPJ_Fundo_Classe
-so_cnpj_classe = df[df['CNPJ_Fundo'].isna() & df['CNPJ_Fundo_Classe'].notna()]
+        for idx, row in enumerate(rows, 1):
+            cols = [td.get_text(strip=True) for td in row.select("td")[:-1]]
+            # colunas: Nome Fundo, Categoria, Tipo, Espécie, DataRef, DataEntrega, Status, Versão, Modalidade
+            nome_fundo, categoria, tipo, especie, data_ref, data_entrega, status, versao, modalidade = cols
 
-# CNPJs únicos em cada
-cnpjs_fundo = set(so_cnpj_fundo['CNPJ_Fundo'].dropna().unique())
-cnpjs_classe = set(so_cnpj_classe['CNPJ_Fundo_Classe'].dropna().unique())
+            # converte Data de Referência para AAAA-MM
+            # supõe formato DD/MM/AAAA
+            m = re.match(r"(\d{2})/(\d{2})/(\d{4})", data_ref)
+            yyyy_mm = f"{m.group(3)}-{m.group(2)}" if m else data_ref.replace("/", "-")
 
-# Diferenças entre os conjuntos
-so_no_fundo = cnpjs_fundo - cnpjs_classe
-so_na_classe = cnpjs_classe - cnpjs_fundo
-intersecao = cnpjs_fundo & cnpjs_classe
+            # encontra link(s) de download no último <td>
+            action_cell = row.find_all("td")[-1]
+            links = action_cell.find_all("a", href=True)
 
-# Resultado
-print("Total de linhas:", total_linhas)
-print("Linhas com CNPJ_Fundo apenas:", len(so_cnpj_fundo))
-print("Linhas com CNPJ_Fundo_Classe apenas:", len(so_cnpj_classe))
-print("Linhas com ambos preenchidos:", len(ambos_preenchidos))
-print("CNPJs só no CNPJ_Fundo:", len(so_no_fundo))
-print("CNPJs só no CNPJ_Fundo_Classe:", len(so_na_classe))
-print("CNPJs presentes em ambos:", len(intersecao))
+            for link in links:
+                href = link["href"]
+                # link pode ser relativo; torna absoluto
+                download_url = requests.compat.urljoin(url, href)
+                # monta nome de arquivo
+                # usa <Tipo>_<YYYY-MM>_<idx>.pdf
+                safe_tipo = re.sub(r"[^\w\-]", "_", tipo)
+                filename = f"{safe_tipo}_{yyyy_mm}_{idx}.pdf"
+                filepath = download_path / filename
+
+                # baixa via requests usando os cookies do Selenium
+                resp = session.get(download_url)
+                resp.raise_for_status()
+                with open(filepath, "wb") as f:
+                    f.write(resp.content)
+                downloaded.append(filename)
+
+            # imprime a linha em tabela simples
+            print(f"{idx:02d} | {data_ref} | {categoria} / {tipo} / {especie} -> baixou {len(links)} arquivo(s)")
+
+        print(f"Arquivos salvos em: {download_path}")
+        print("Lista de downloads:\n ", "\n  ".join(downloaded))
+
+    finally:
+        driver.quit()
+
+
+if __name__ == "__main__":
+    # teste para os dois CNPJs
+    for c in ["01.235.622/0001-61", "00.332.266/0001-31"]:
+        download_documents_for_cnpj(c, download_dir="downloads")

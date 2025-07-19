@@ -3,6 +3,11 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 from utils import load_config
+import io
+import zipfile
+import requests
+from bs4 import BeautifulSoup
+
 
 # ========================================
 # CONFIGURAÇÃO GLOBAL
@@ -89,6 +94,44 @@ def load_consolidado_geral_completo():
     )
     return df
 
+
+def get_documents_zip(cnpj_raw: str) -> bytes:
+    """Retorna um ZIP em bytes contendo todos os PDFs do gerenciador da B3 para o CNPJ."""
+    cnpj_digits = re.sub(r"\D", "", cnpj_raw)
+    base_url = (
+        "https://fnet.bmfbovespa.com.br/fnet/publico/"
+        f"abrirGerenciadorDocumentosCVM?cnpjFundo={cnpj_digits}"
+    )
+    session = requests.Session()
+    # carrega a página e extrai cookies
+    resp = session.get(base_url)
+    soup = BeautifulSoup(resp.text, "html.parser")
+    rows = soup.select("#tblDocumentosEnviados tbody tr")
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for idx, row in enumerate(rows, 1):
+            cols = [td.get_text(strip=True) for td in row.select("td")[:-1]]
+            tipo = cols[2]  # coluna "Tipo"
+            data_ref = cols[4]  # coluna "Data de Referência"
+            # formato YYYY-MM
+            m = re.match(r"(\d{2})/(\d{2})/(\d{4})", data_ref)
+            yyyy_mm = f"{m.group(3)}-{m.group(2)}" if m else data_ref.replace("/", "-")
+            # localiza link(s)
+            for a in row.select("td")[-1].select("a[href]"):
+                href = a["href"]
+                pdf_url = requests.compat.urljoin(base_url, href)
+                r = session.get(pdf_url)
+                r.raise_for_status()
+                safe_tipo = re.sub(r"[^\w\-]", "_", tipo)
+                filename = f"{safe_tipo}_{yyyy_mm}_{idx}.pdf"
+                zf.writestr(filename, r.content)
+
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
+
+
+
 # ========================================
 # FUNÇÕES DE INTERFACE
 # ========================================
@@ -96,8 +139,8 @@ def sidebar_selections(df_fundos, df_ativos):
     st.sidebar.header("Navegação e Seleção")
     page = st.sidebar.selectbox(
         "Página",
-        ["Visão Geral", "Portfólio de Ativos", "Portfólio de Imóveis",
-         "Análise Financeira", "Análise Qualitativa"]
+     ["Visão Geral", "Portfólio de Ativos", "Portfólio de Imóveis",
+     "Análise Financeira", "Análise Qualitativa", "Informações Adicionais"]
     )
 
 
@@ -408,34 +451,68 @@ def show_analise_qualitativa(df_fundos, df_geral, primary_cnpj):
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # 5) Histograma: Mercado de Negociação
-    st.markdown("### Distribuição por Mercado de Negociação")
+    # 5) Histograma proporcional: Mercado de Negociação
+    st.markdown("### Distribuição Proporcional por Mercado de Negociação")
+
     mflags = {
         "Mercado_Negociacao_Bolsa": "Bolsa",
-        "Mercado_Negociacao_MBO": "MBO",
-        "Mercado_Negociacao_MB": "MB",
-        "Fundo_Exclusivo": "Exclusivo",
+        "Mercado_Negociacao_MBO":   "MBO",
+        "Mercado_Negociacao_MB":    "MB",
+        "Fundo_Exclusivo":          "Exclusivo",
         "Fundo_Nao_Listado_Exclusivo": "Não Listado"
     }
+
     registros = []
     for _, row in df_q.iterrows():
-        for col, nome in mflags.items():
-            if str(row.get(col, "")).strip().upper() == "SIM":
-                registros.append({
-                    "CNPJ_Fundo": row["CNPJ_Fundo"],
-                    "Mercado": nome
-                })
-    if registros:
-        df_m = pd.DataFrame(registros)
-        fig2 = px.histogram(
-            df_m,
-            x="Mercado",
-            color="CNPJ_Fundo",
-            barmode="group",
-            labels={"Mercado":"Mercado de Negociação","CNPJ_Fundo":"Fundo","count":"Quantidade"}
-        )
-        st.plotly_chart(fig2, use_container_width=True)
+        # identifica em quais mercados o fundo negocia
+        mercados = [
+            nome for col, nome in mflags.items()
+            if str(row.get(col, "")).strip().upper() == "SIM"
+        ]
+        if not mercados:
+            mercados = ["Não Informado"]
+        peso = 1.0 / len(mercados)
+        for nome in mercados:
+            registros.append({
+                "CNPJ_Fundo": row["CNPJ_Fundo"],
+                "Mercado":    nome,
+                "Peso":       peso
+            })
 
+    df_m = pd.DataFrame(registros)
+
+    fig2 = px.bar(
+        df_m,
+        x="Mercado",
+        y="Peso",
+        color="CNPJ_Fundo",
+        barmode="group",
+        labels={
+            "Mercado":    "Mercado de Negociação",
+            "CNPJ_Fundo": "Fundo",
+            "Peso":       "Proporção"
+        }
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+def show_info_adicionais(cnpj: str):
+    st.subheader("Informações Adicionais e Documentos CVM")
+    st.markdown(
+        """
+        Aqui você pode baixar todos os documentos oficiais enviados à CVM 
+        para o fundo selecionado. Eles vêm agrupados num arquivo ZIP, nomeados 
+        por tipo e período.
+        """
+    )
+    if st.button("Gerar e baixar ZIP de documentos"):
+        with st.spinner("Buscando documentos e montando ZIP..."):
+            zip_bytes = get_documents_zip(cnpj)
+        st.download_button(
+            label="📥 Baixar documentos (ZIP)",
+            data=zip_bytes,
+            file_name=f"{cnpj.replace('/', '').replace('.', '')}_docs.zip",
+            mime="application/zip"
+        )
 
 def main():
     df_fundos        = load_consolidado_geral()
@@ -461,8 +538,11 @@ def main():
         show_portfolio_imoveis(df_imovel, cnpj)
     elif page == "Análise Financeira":
         show_analise_financeira(df_fundos, df_res, df_rent, df_imovel, cnpj)
-    else:  # nova aba
+    elif page == "Análise Qualitativa":
         show_analise_qualitativa(df_fundos, df_geral_compl, cnpj)
+    else:  
+        show_info_adicionais(cnpj)
+    
 
 if __name__ == "__main__":
     main()
