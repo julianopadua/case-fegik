@@ -22,8 +22,6 @@ def load_config():
         "data_raw": os.path.join(script_dir, config["paths"]["data_raw"]),
         "data_processed": os.path.join(script_dir, config["paths"]["data_processed"]),
         "data_consolidated": os.path.join(script_dir, config["paths"]["data_consolidated"]),
-        "output": os.path.join(script_dir, config["paths"]["output"]),
-        "img": os.path.join(script_dir, config["paths"]["img"]),
         "src": os.path.join(script_dir, config["paths"]["src"]),
         "log": os.path.join(script_dir, config["paths"]["log"]),
         "log_downloads": os.path.join(script_dir, config["paths"]["log"], config["files"]["log_downloads"]),
@@ -31,7 +29,7 @@ def load_config():
     }
 
     # Criação das pastas principais se não existirem
-    for key in ["data_raw", "data_processed", "data_consolidated", "output", "img", "src", "log"]:
+    for key in ["data_raw", "data_processed", "data_consolidated", "src", "log"]:
         os.makedirs(paths[key], exist_ok=True)
 
     return paths, config
@@ -85,6 +83,7 @@ def download_files(links, save_path, log_path=None):
 
     # Se não há o que baixar, retorna silenciosamente
     if not to_download:
+        print("nothing to download - clear the folders data and log")
         return
 
     for url, filename, dest in tqdm(to_download, desc="Baixando arquivos"):

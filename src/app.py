@@ -6,7 +6,15 @@ from utils import load_config
 import io
 import zipfile
 import requests
+import re
 from bs4 import BeautifulSoup
+import time
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
 
 
 # ========================================
@@ -97,44 +105,96 @@ def load_consolidado_geral_completo():
 
 def get_documents_zip(cnpj_raw: str) -> bytes:
     """Retorna um ZIP em bytes contendo todos os PDFs do gerenciador da B3 para o CNPJ."""
+    # prepara CNPJ sem formatação
     cnpj_digits = re.sub(r"\D", "", cnpj_raw)
     base_url = (
         "https://fnet.bmfbovespa.com.br/fnet/publico/"
         f"abrirGerenciadorDocumentosCVM?cnpjFundo={cnpj_digits}"
     )
-    session = requests.Session()
-    # carrega a página e extrai cookies
-    resp = session.get(base_url)
-    soup = BeautifulSoup(resp.text, "html.parser")
-    rows = soup.select("#tblDocumentosEnviados tbody tr")
 
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for idx, row in enumerate(rows, 1):
-            cols = [td.get_text(strip=True) for td in row.select("td")[:-1]]
-            tipo = cols[2]  # coluna "Tipo"
-            data_ref = cols[4]  # coluna "Data de Referência"
-            # formato YYYY-MM
-            m = re.match(r"(\d{2})/(\d{2})/(\d{4})", data_ref)
-            yyyy_mm = f"{m.group(3)}-{m.group(2)}" if m else data_ref.replace("/", "-")
-            # localiza link(s)
-            for a in row.select("td")[-1].select("a[href]"):
-                href = a["href"]
-                pdf_url = requests.compat.urljoin(base_url, href)
-                r = session.get(pdf_url)
-                r.raise_for_status()
-                safe_tipo = re.sub(r"[^\w\-]", "_", tipo)
-                filename = f"{safe_tipo}_{yyyy_mm}_{idx}.pdf"
-                zf.writestr(filename, r.content)
+    # configura Selenium + Chrome headless
+    chrome_opts = Options()
+    chrome_opts.add_argument("--headless")
+    chrome_opts.add_argument("--no-sandbox")
+    chrome_opts.add_argument("--disable-gpu")
+    driver = webdriver.Chrome(options=chrome_opts)
 
-    zip_buffer.seek(0)
-    return zip_buffer.getvalue()
+    try:
+        driver.get(base_url)
+        # espera a tabela carregar
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "#tblDocumentosEnviados tbody tr"))
+        )
+        time.sleep(1)  # dá um segundo pro JS preencher tudo
+
+        # extrai cookies para requests
+        session = requests.Session()
+        for ck in driver.get_cookies():
+            session.cookies.set(ck["name"], ck["value"])
+
+        # parse das linhas
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        rows = soup.select("#tblDocumentosEnviados tbody tr")
+
+        # monta ZIP em memória
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for idx, row in enumerate(rows, 1):
+                cols = [td.get_text(strip=True) for td in row.select("td")[:-1]]
+                tipo = cols[2]
+                data_ref = cols[4]
+                m = re.match(r"(\d{2})/(\d{2})/(\d{4})", data_ref)
+                yyyy_mm = f"{m.group(3)}-{m.group(2)}" if m else data_ref.replace("/", "-")
+
+                for a in row.select("td")[-1].select("a[href]"):
+                    href = a["href"]
+                    pdf_url = requests.compat.urljoin(base_url, href)
+                    r = session.get(pdf_url)
+                    r.raise_for_status()
+                    safe_tipo = re.sub(r"[^\w\-]", "_", tipo)
+                    filename = f"{safe_tipo}_{yyyy_mm}_{idx}.pdf"
+                    zf.writestr(filename, r.content)
+
+        buf.seek(0)
+        return buf.getvalue()
+
+    finally:
+        driver.quit()
 
 
 
 # ========================================
 # FUNÇÕES DE INTERFACE
 # ========================================
+def show_fundo_info(df_geral_completo, cnpj):
+    """
+    Exibe endereço, contato, administrador, e-mail, telefone do fundo
+    com base no último registro de consolidação.
+    """
+    df = df_geral_completo[df_geral_completo["CNPJ_Fundo"] == cnpj]
+    if df.empty:
+        st.info("Nenhuma informação cadastral disponível.")
+        return
+
+    # pega o registro mais recente
+    last = df.sort_values("Data_Referencia").iloc[-1]
+
+    st.markdown("### Dados Cadastrais do Fundo")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**Administrador:** {last['Nome_Administrador']}  ")
+        st.markdown(f"**CNPJ Admin.:** {last['CNPJ_Administrador']}  ")
+        st.markdown(f"**Endereço:** {last['Logradouro']}, {last['Numero']} {last['Complemento']}  ")
+        st.markdown(f"**Bairro / Cidade:** {last['Bairro']} / {last['Cidade']}–{last['Estado']}  ")
+        st.markdown(f"**CEP:** {last['CEP']}  ")
+    with col2:
+        telefones = "\n".join(filter(None, [last.get(f"Telefone{i}") for i in (1,2,3)]))
+        st.markdown(f"**Telefone(s):**  \n{telefones}  ")
+        st.markdown(f"**E-mail:** {last['Email']}  ")
+        st.markdown(f"**Site:** {last['Site']}  ")
+        st.markdown(f"**Público-Alvo:** {last['Publico_Alvo']}  ")
+        st.markdown(f"**Gestão:** {last['Tipo_Gestao']}  ")
+
 def sidebar_selections(df_fundos, df_ativos):
     st.sidebar.header("Navegação e Seleção")
     page = st.sidebar.selectbox(
@@ -147,8 +207,10 @@ def sidebar_selections(df_fundos, df_ativos):
     # seleção global de fundo
     df_op = df_fundos.copy()
     df_op["opcao"] = df_op["CNPJ_Chave"] + " – " + df_op["Nome_Fundo"]
-    selec = st.sidebar.selectbox("Fundo:", sorted(df_op["opcao"]))
-    cnpj = selec.split(" – ")[0]
+    opcoes = [""] + sorted(df_op["opcao"])
+    selec = st.sidebar.selectbox("Fundo:", opcoes, format_func=lambda x: "Selecione um fundo…" if x=="" else x)
+    cnpj = None if selec=="" else selec.split(" – ")[0]
+
 
     tipos_sel = []
     if page == "Portfólio de Ativos":
@@ -158,8 +220,10 @@ def sidebar_selections(df_fundos, df_ativos):
 
     return page, cnpj, tipos_sel
 
-def show_overview():
+def show_overview(df_geral_compl, cnpj):
     st.title("Dashboard Case FEGIK")
+    st.markdown("## Visão Geral do Fundo")
+    show_fundo_info(df_geral_compl, cnpj)
     st.markdown("""
 Este aplicativo interativo cobre as análises do Case FEGIK em várias abas:
 
@@ -168,6 +232,16 @@ Este aplicativo interativo cobre as análises do Case FEGIK em várias abas:
 - **Portfólio de Imóveis**: evolução e quantidade de imóveis para venda.
 - **Análise Financeira**: receitas, custos, vacância, inadimplência e rentabilidade.
 """)
+    st.markdown(
+    """
+    ---
+    **Sobre o desenvolvedor**  
+    • Juliano E. S. Pádua – [LinkedIn](https://www.linkedin.com/in/julianopadua)  
+    • Repositório: https://github.com/julianopadua/case-fegik# 
+    • Email: julianofpadua@gmail.com  
+    """
+    )
+
 
 def show_dashboard_header(df_fundo):
     st.title(f"Análise do Fundo: {df_fundo['Nome_Fundo'].iloc[0]}")
@@ -510,7 +584,7 @@ def show_info_adicionais(cnpj: str):
         st.download_button(
             label="📥 Baixar documentos (ZIP)",
             data=zip_bytes,
-            file_name=f"{cnpj.replace('/', '').replace('.', '')}_docs.zip",
+            file_name=f"{cnpj}_{re.sub(r'D','',cnpj)}.zip",
             mime="application/zip"
         )
 
@@ -525,9 +599,13 @@ def main():
     page, cnpj, tipos_sel = sidebar_selections(df_fundos, df_ativos)
 
     if page == "Visão Geral":
-        show_overview()
+        show_overview(df_geral_compl, cnpj)
         return
 
+
+    if cnpj is None:
+        st.warning("🔎 Por favor, selecione um fundo para começar.")
+        return
     # cabeçalho fixo
     df_fundo = df_fundos[df_fundos["CNPJ_Chave"] == cnpj]
     show_dashboard_header(df_fundo)

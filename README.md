@@ -1,6 +1,6 @@
 # Case FEGIK – BI e Dados
 
-> Implementado por **Juliano Pádua**
+> Desenvolvido por **Juliano Pádua**
 
 ## Sumário
 
@@ -9,6 +9,8 @@
 - [Decisões de Projeto](#decisões-de-projeto)
 - [Estrutura de Diretórios](#estrutura-de-diretórios)
 - [Execução Local](#execução-local)
+  - [Com ambiente virtual (recomendado)](#com-ambiente-virtual-recomendado)
+  - [Execução do Streamlit](#execução-do-streamlit)
 - [Dependências](#dependências)
 - [Notas Finais](#notas-finais)
 
@@ -16,58 +18,52 @@
 
 ## Descrição Geral
 
-Este projeto foi desenvolvido como parte do processo seletivo para o programa de estágio em BI e Dados da FEGIK. O objetivo central é realizar a extração, o tratamento e a consolidação de informações públicas fornecidas pela Comissão de Valores Mobiliários (CVM) sobre Fundos Imobiliários (FIIs), com foco nos informes trimestrais disponíveis para consulta.
+Este projeto foi desenvolvido como parte do processo seletivo para o programa de estágio em BI e Dados da FEGIK. Seu objetivo principal é consolidar informações públicas da Comissão de Valores Mobiliários (CVM) sobre Fundos Imobiliários (FIIs) e permitir sua análise em um dashboard interativo.
 
 ---
 
 ## Objetivos do Projeto
 
-O projeto está dividido em três etapas principais:
+O projeto contempla três etapas principais:
 
-1. **Extração automatizada dos dados (Webscraping):**
-   - Acessar dinamicamente o repositório da CVM.
-   - Baixar os arquivos `.zip` contendo os informes trimestrais.
+1. **Extração automatizada de dados (Webscraping):**
+   - Download dos arquivos `.zip` dos informes trimestrais da CVM.
 
 2. **Tratamento e consolidação:**
-   - Descompactar os arquivos `.zip` em diretórios organizados por ano.
-   - Consolidar os arquivos `.csv` de cada tipo de informe em um único arquivo por categoria, contendo dados de todos os anos disponíveis.
+   - Extração e unificação dos `.csv` por tipo de documento.
 
-3. **Registro e controle de execução:**
-   - Implementar logs persistentes tanto para os downloads quanto para o processo de consolidação, evitando redundâncias e assegurando rastreabilidade.
+3. **Visualização interativa:**
+   - Criação de um painel em Streamlit que permite explorar, comparar e analisar os dados dos fundos.
 
 ---
 
 ## Decisões de Projeto
 
-- **Separação modular via `utils.py`:** todas as funções auxiliares foram abstraídas para um único módulo reutilizável.
-- **Uso de logs persistentes:** tanto os arquivos já baixados quanto os erros e sucessos de processamento são documentados em arquivos na pasta `log/`.
-- **Evita downloads redundantes:** ao executar o script mais de uma vez, os arquivos já existentes não são baixados novamente, nem há animação desnecessária.
-- **Leitura robusta de arquivos CSV:** os arquivos foram lidos com codificação `latin-1`, separador `;` e aspas desconsideradas, para lidar com inconsistências frequentes nas bases da CVM.
-- **Consolidação dinâmica:** o algoritmo identifica automaticamente os tipos de arquivos com base em seus nomes, descartando o sufixo de ano, e agrupa todos os anos de cada tipo em um único arquivo final.
+- **Modularização:** funções auxiliares estão em `utils.py`, separando lógica de extração e visualização.
+- **Logs persistentes:** monitoramento do progresso dos downloads e processamento.
+- **Evita redundâncias:** reaproveitamento de arquivos já processados.
+- **Pipeline resiliente:** tratamento de arquivos inconsistentes da CVM.
 
 ---
 
 ## Estrutura de Diretórios
 
-A estrutura do projeto é gerada automaticamente da seguinte forma:
-
 ```
 
 case-fegik/
 ├── data/
-│   ├── raw/               ← Arquivos .zip baixados da CVM
-│   ├── processed/         ← CSVs extraídos dos arquivos .zip
-│   └── consolidated/      ← Arquivos CSV únicos por tipo de dado
+│   ├── raw/                ← Arquivos .zip da CVM
+│   ├── processed/          ← CSVs extraídos dos .zip
+│   └── consolidated/       ← CSVs consolidados por tipo
 ├── log/
-│   ├── downloads\_log.csv  ← Histórico de downloads
-│   └── processamento.log  ← Log de consolidação e extração
-├── output/
-├── img/
+│   ├── downloads\_log.csv   ← Histórico de downloads
+│   └── processamento.log   ← Log de processamento
 ├── src/
-│   ├── main.py            ← Script principal
-│   └── utils.py           ← Módulo com funções auxiliares
-├── config.yaml            ← Configuração de caminhos
-├── requirements.txt       ← Dependências do projeto
+│   ├── app.py              ← Aplicação Streamlit
+│   ├── main.py             ← Script de extração e tratamento
+│   └── utils.py            ← Funções auxiliares
+├── config.yaml             ← Arquivo de configuração
+├── requirements.txt        ← Dependências do projeto
 ├── .gitignore
 └── README.md
 
@@ -77,49 +73,96 @@ case-fegik/
 
 ## Execução Local
 
-### Pré-requisitos
+### Com ambiente virtual (recomendado)
 
-- Python **3.10 ou superior**
-- `pip` instalado
-
-### Passo a passo
-
-1. Clone o repositório:
+#### 1. Clone o repositório
 
 ```bash
 git clone https://github.com/seu-usuario/case-fegik.git
 cd case-fegik
 ````
 
-2. Instale as dependências:
+#### 2. Crie e ative um ambiente virtual
+
+##### No **Linux/macOS**:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+##### No **Windows** (cmd):
+
+```cmd
+python -m venv venv
+venv\Scripts\activate
+```
+
+##### No **Windows PowerShell**:
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+#### 3. Instale as dependências
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Execute o script principal:
+#### 4. Execute o script de extração e consolidação
 
 ```bash
 python src/main.py
 ```
 
-Ao final da execução, os dados estarão disponíveis em `data/consolidated/`, prontos para análise ou visualização em ferramentas como Power BI.
+Esse script fará o download dos arquivos da CVM e consolidará os dados em `data/consolidated/`.
+
+---
+
+### Execução do Streamlit
+
+Após a extração dos dados:
+
+```bash
+streamlit run src/app.py
+```
+
+O navegador será aberto automaticamente com o dashboard. A aplicação permite:
+
+* Selecionar um fundo pelo nome ou CNPJ;
+* Visualizar indicadores financeiros ao longo do tempo;
+* Comparar múltiplos fundos e calcular médias;
+* Acessar metadados (endereço, telefone, gestor, CNPJ, site e e-mail);
+* Conferir detalhes como segmento de atuação, público-alvo, data de início e mandato;
+* Ver seu próprio perfil (LinkedIn, GitHub etc).
 
 ---
 
 ## Dependências
 
-As bibliotecas utilizadas estão listadas no arquivo `requirements.txt`, com versões mínimas recomendadas:
+As principais bibliotecas usadas estão em `requirements.txt`. Incluem:
 
 ```
+streamlit>=1.35.0
+pandas>=2.2.2
 requests>=2.31.0
 beautifulsoup4>=4.12.3
-tqdm>=4.66.4
 pyyaml>=6.0.1
+tqdm>=4.66.4
+plotly>=5.22.0
 ```
 
-Essas versões foram escolhidas para garantir estabilidade com os métodos utilizados no parsing de HTML, manipulação de arquivos e progresso de download.
+Essas versões garantem compatibilidade com os métodos de scraping, leitura de arquivos e construção de gráficos interativos.
 
 ---
 
+## Notas Finais
 
+* A estrutura foi pensada para permitir fácil escalabilidade.
+* Outras fontes externas podem ser integradas posteriormente, como Yahoo Finance ou classificações de risco da CVM.
+* Sinta-se à vontade para clonar, estudar e adaptar o projeto.
+
+> **Juliano Pádua**
+> *LinkedIn, GitHub e contato pessoal a definir no topo da aplicação.*
